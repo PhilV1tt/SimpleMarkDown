@@ -2,16 +2,23 @@
 //  SimpleMarkDownApp.swift
 //  SimpleMarkDown
 //
-//  Created by vitt on 21/03/2026.
-//
 
 import SwiftUI
 
 @main
 struct SimpleMarkDownApp: App {
+
     var body: some Scene {
         WindowGroup {
             ContentView()
+        }
+        .defaultSize(width: 820, height: 600)
+        .windowToolbarStyle(.unified(showsTitle: true))
+
+        // Settings scene = la fenêtre qui s'ouvre avec ⌘,
+        // macOS l'ajoute automatiquement dans le menu "SimpleMarkDown > Settings…"
+        Settings {
+            SettingsView()
         }
     }
 }
