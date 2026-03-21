@@ -1,10 +1,10 @@
 # SimpleMarkDown
 
-A minimal Markdown editor for macOS with live inline preview — no separate pane, the formatting appears directly in the text as you type (Obsidian-style).
+A minimal Markdown editor for macOS with live inline preview  no separate pane, the formatting appears directly in the text as you type (Obsidian-style).
 
 ## Features
 
-- **Live inline preview** — syntax is hidden when the cursor moves away, rendered inline
+- **Live inline preview** - syntax is hidden when the cursor moves away, rendered inline
 - **GitHub Markdown syntax** supported:
   - Headings H1–H6
   - Bold, italic, bold+italic
