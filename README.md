@@ -19,12 +19,19 @@ A minimal Markdown editor for macOS with live inline preview — no separate pan
 - **Settings** (⌘,) — theme (system / light / dark), font size, font family
 - **Open / Save** files (⌘O / ⌘S)
 
+## Install
+
+1. Download `SimpleMarkDown.dmg` from the [latest release](https://github.com/PhilV1tt/SimpleMarkDown/releases/latest)
+2. Open the DMG and drag the app to your **Applications** folder
+3. First launch: **right-click → Open** (required once to bypass macOS Gatekeeper for unsigned apps)
+
 ## Requirements
 
 - macOS 14 or later
-- Xcode 15 or later (to build from source)
 
-## Build
+## Build from source
+
+- Xcode 15 or later required
 
 1. Clone the repo
 2. Open `SimpleMarkDown.xcodeproj` in Xcode
