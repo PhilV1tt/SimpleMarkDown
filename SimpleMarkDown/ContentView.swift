@@ -919,27 +919,35 @@ struct MarkdownEditorView: NSViewRepresentable {
             guard let tv = notification.object as? NSTextView else { return }
             parent.text = tv.string
             parent.isModified = true
-            applyIfNeeded(tv)
+            // fromTextChange: true — dropped format passes get re-queued (#3)
+            applyIfNeeded(tv, fromTextChange: true)
             if parent.isTypewriterMode { scrollToCenter(tv) }
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
             guard let tv = notification.object as? NSTextView else { return }
-            applyIfNeeded(tv)
+            // fromTextChange: false — if we are already formatting (e.g. because
+            // apply() itself triggered this delegate call), do NOT queue a re-run
+            // or we create an infinite loop: apply → selection change → apply → …
+            applyIfNeeded(tv, fromTextChange: false)
             if parent.isTypewriterMode { scrollToCenter(tv) }
-            // Refresh line number ruler
             tv.enclosingScrollView?.verticalRulerView?.needsDisplay = true
         }
 
-        // Fix #3: queue a follow-up pass instead of silently dropping
-        private func applyIfNeeded(_ tv: NSTextView) {
-            guard !isFormatting else { needsFormat = true; return }
+        // Fix #3: queue a follow-up pass when a text-change arrives mid-format.
+        // Selection-change calls never queue a re-run (fromTextChange: false) to
+        // avoid the apply() → textViewDidChangeSelection → apply() infinite loop.
+        private func applyIfNeeded(_ tv: NSTextView, fromTextChange: Bool) {
+            guard !isFormatting else {
+                if fromTextChange { needsFormat = true }
+                return
+            }
             isFormatting = true
             MarkdownFormatter.apply(to: tv)
             isFormatting = false
             if needsFormat {
                 needsFormat = false
-                applyIfNeeded(tv)
+                applyIfNeeded(tv, fromTextChange: true)
             }
         }
 
