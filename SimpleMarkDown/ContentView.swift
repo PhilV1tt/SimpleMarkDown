@@ -11,6 +11,11 @@ internal import UniformTypeIdentifiers
 
 enum InsertAction: Equatable {
     case bold, italic, strikethrough, inlineCode, link
+    case boldUnderscore, italicUnderscore
+    case highlight, comment
+    case inlineMath, mathBlock
+    case wikilink, tag, footnote
+    case callout(String)
     case heading(Int)
     case table, codeBlock, image
     case copyRichText
@@ -456,7 +461,15 @@ struct QuickInsertBar: View {
         ("Bold", "bold", .bold),
         ("Italic", "italic", .italic),
         ("~~", "strikethrough", .strikethrough),
+        ("==Highlight==", "highlighter", .highlight),
+        ("%%Comment%%", "eye.slash", .comment),
         ("`Code`", "chevron.left.forwardslash.chevron.right", .inlineCode),
+        ("$Math$", "function", .inlineMath),
+        ("$$Block$$", "sum", .mathBlock),
+        ("[[Wiki]]", "link.badge.plus", .wikilink),
+        ("#Tag", "tag", .tag),
+        ("[^fn]", "textformat.superscript", .footnote),
+        ("Callout", "exclamationmark.bubble", .callout("NOTE")),
         ("Link", "link", .link),
         ("Table", "tablecells", .table),
         ("Block", "curlybraces", .codeBlock),
@@ -969,7 +982,7 @@ struct MarkdownEditorView: NSViewRepresentable {
                                    .trimmingCharacters(in: .newlines)
 
             // Unordered list (task or bullet)
-            let ulPrefixes = ["- [x] ", "- [X] ", "- [ ] ", "- ", "* "]
+            let ulPrefixes = ["- [x] ", "- [X] ", "- [ ] ", "- ", "* ", "+ "]
             for prefix in ulPrefixes {
                 if currentLine.hasPrefix(prefix) {
                     let content = String(currentLine.dropFirst(prefix.count))
@@ -985,7 +998,7 @@ struct MarkdownEditorView: NSViewRepresentable {
             }
 
             // Ordered list
-            if let m = currentLine.range(of: #"^(\d+)\. "#, options: .regularExpression) {
+            if let m = currentLine.range(of: #"^(\d+)[.)]\s"#, options: .regularExpression) {
                 let numStr = String(currentLine[m].dropLast(2))
                 if let num = Int(numStr) {
                     let content = String(currentLine.dropFirst(numStr.count + 2))
@@ -1040,6 +1053,28 @@ struct MarkdownEditorView: NSViewRepresentable {
                 tv.insertText("\n```\n\(inner)\n```\n", replacementRange: sel)
             case .image:
                 tv.insertText("![alt text](image-url)", replacementRange: sel)
+            case .boldUnderscore:
+                toggle(tv: tv, sel: sel, selected: selected, open: "__", close: "__", placeholder: "bold text")
+            case .italicUnderscore:
+                toggle(tv: tv, sel: sel, selected: selected, open: "_", close: "_", placeholder: "italic text")
+            case .highlight:
+                toggle(tv: tv, sel: sel, selected: selected, open: "==", close: "==", placeholder: "highlighted text")
+            case .comment:
+                toggle(tv: tv, sel: sel, selected: selected, open: "%%", close: "%%", placeholder: "comment")
+            case .inlineMath:
+                toggle(tv: tv, sel: sel, selected: selected, open: "$", close: "$", placeholder: "formula")
+            case .mathBlock:
+                let inner = selected.isEmpty ? "E = mc^2" : selected
+                tv.insertText("\n$$\n\(inner)\n$$\n", replacementRange: sel)
+            case .wikilink:
+                let page = selected.isEmpty ? "Page Name" : selected
+                tv.insertText("[[\(page)]]", replacementRange: sel)
+            case .tag:
+                tv.insertText("#\(selected.isEmpty ? "tag" : selected)", replacementRange: sel)
+            case .footnote:
+                tv.insertText("[^1]", replacementRange: sel)
+            case .callout(let type):
+                tv.insertText("\n> [!\(type)]\n> Content here\n", replacementRange: sel)
             case .copyRichText:
                 copyAsRichText(tv)
             }
@@ -1231,17 +1266,38 @@ struct MarkdownFormatter {
     // MARK: Block elements
 
     private static func applyBlock(storage: NSTextStorage, str: String, cursor: Int, ctx: Context) {
-        var loc          = 0
-        var inCodeBlock  = false
+        var loc            = 0
+        var inCodeBlock    = false
         var codeBlockStart = 0
-        var inTable      = false
-        var tableLineIdx = 0
+        var inMathBlock    = false
+        var mathBlockStart = 0
+        var inTable        = false
+        var tableLineIdx   = 0
         var tableAligns: [NSTextAlignment] = []
 
         for line in str.components(separatedBy: "\n") {
             let len       = (line as NSString).length
             let lineRange = NSRange(location: loc, length: len)
             let onLine    = cursor >= loc && cursor <= loc + len
+
+            // ── Display math block $$
+            if line.trimmingCharacters(in: .whitespaces) == "$$" {
+                inTable = false; tableLineIdx = 0; tableAligns = []
+                if !inMathBlock {
+                    inMathBlock = true; mathBlockStart = loc
+                } else {
+                    let blockRange = NSRange(location: mathBlockStart, length: loc + len - mathBlockStart)
+                    storage.addAttributes([.font: ctx.mono,
+                                           .foregroundColor: NSColor.systemPurple,
+                                           .backgroundColor: ctx.codeBg], range: blockRange)
+                    inMathBlock = false
+                }
+                storage.addAttributes(onLine
+                    ? [.font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular), .foregroundColor: NSColor.systemPurple] as [NSAttributedString.Key: Any]
+                    : ctx.hide, range: lineRange)
+                loc += len + 1; continue
+            }
+            if inMathBlock { loc += len + 1; continue }
 
             // ── Fenced code block
             if line.hasPrefix("```") {
@@ -1297,11 +1353,28 @@ struct MarkdownFormatter {
             else if line.hasPrefix("##### ")  { applyHeading(storage, loc, len, prefixLen: 6, size: ctx.fontSize * 1.0,  onLine: onLine, ctx: ctx) }
             else if line.hasPrefix("###### ") { applyHeading(storage, loc, len, prefixLen: 7, size: ctx.fontSize * 0.9,  onLine: onLine, ctx: ctx) }
 
+            // ── Callout > [!TYPE] (Obsidian) — must come before generic blockquote
+            else if line.hasPrefix("> [!") {
+                let afterBang = line.dropFirst(4)
+                let typeName  = String(afterBang.prefix(while: { $0 != "]" && $0 != " " && $0 != "\n" }))
+                let color     = calloutColor(typeName)
+                storage.addAttributes([.foregroundColor: color], range: lineRange)
+                if !onLine {
+                    storage.addAttributes(ctx.hide, range: NSRange(location: loc, length: min(2, len)))
+                }
+            }
+
             // ── Blockquote
             else if line.hasPrefix("> ") {
                 storage.addAttributes([.foregroundColor: NSColor.secondaryLabelColor], range: lineRange)
                 let pr = NSRange(location: loc, length: min(2, len))
                 storage.addAttributes(onLine ? [.foregroundColor: ctx.syntax] as [NSAttributedString.Key: Any] : ctx.hide, range: pr)
+            }
+
+            // ── Footnote definition [^id]:
+            else if line.hasPrefix("[^"), line.contains("]:") {
+                storage.addAttributes([.foregroundColor: NSColor.systemIndigo,
+                                       .font: NSFont.systemFont(ofSize: ctx.fontSize * 0.9)], range: lineRange)
             }
 
             // ── Task list (before generic unordered)
@@ -1318,14 +1391,14 @@ struct MarkdownFormatter {
                 }
             }
 
-            // ── Unordered list
-            else if line.hasPrefix("- ") || line.hasPrefix("* ") {
+            // ── Unordered list (-, *, + prefixes)
+            else if line.hasPrefix("- ") || line.hasPrefix("* ") || line.hasPrefix("+ ") {
                 let pr = NSRange(location: loc, length: min(2, len))
                 storage.addAttributes(onLine ? [.foregroundColor: ctx.syntax] as [NSAttributedString.Key: Any] : ctx.hide, range: pr)
             }
 
-            // ── Ordered list
-            else if let m = line.range(of: #"^\d+\. "#, options: .regularExpression) {
+            // ── Ordered list (1. or 1) formats)
+            else if let m = line.range(of: #"^\d+[.)]\s"#, options: .regularExpression) {
                 let prefixLen = line.distance(from: line.startIndex, to: m.upperBound)
                 let pr = NSRange(location: loc, length: prefixLen)
                 storage.addAttributes(onLine
@@ -1335,6 +1408,24 @@ struct MarkdownFormatter {
             }
 
             loc += len + 1
+        }
+    }
+
+    private static func calloutColor(_ type: String) -> NSColor {
+        switch type.lowercased() {
+        case "note":                                     return NSColor.systemBlue
+        case "abstract", "summary", "tldr":             return NSColor.systemCyan
+        case "info":                                     return NSColor.systemBlue
+        case "tip", "hint", "important":                return NSColor.systemGreen
+        case "success", "check", "done":                return NSColor.systemGreen
+        case "question", "help", "faq":                 return NSColor.systemYellow
+        case "warning", "caution", "attention":         return NSColor.systemOrange
+        case "failure", "fail", "missing":              return NSColor.systemRed
+        case "danger", "error":                         return NSColor.systemRed
+        case "bug":                                     return NSColor.systemRed
+        case "example":                                 return NSColor.systemPurple
+        case "quote", "cite":                           return NSColor.secondaryLabelColor
+        default:                                        return NSColor.systemBlue
         }
     }
 
@@ -1463,6 +1554,40 @@ struct MarkdownFormatter {
                           .backgroundColor: ctx.codeBg,
                           .foregroundColor: ctx.codeColor], ctx: ctx)
 
+        // Bold with underscores __text__ (Obsidian)
+        applySpan(storage, str, cursor, escapedPositions: escapedPositions,
+                  pattern: "(?<![_])__(?![_])(.+?)(?<![_])__(?![_])",
+                  attrs: [.font: NSFont.systemFont(ofSize: ctx.fontSize, weight: .bold)], ctx: ctx)
+
+        // Italic with underscores _text_ (Obsidian)
+        applySpan(storage, str, cursor, escapedPositions: escapedPositions,
+                  pattern: "(?<![_])_(?![_])([^_\\n]+)(?<![_])_(?![_])",
+                  attrs: [.font: NSFont(descriptor: ctx.body.fontDescriptor.withSymbolicTraits(.italic),
+                                        size: ctx.fontSize) ?? ctx.body], ctx: ctx)
+
+        // Highlight ==text== (Obsidian)
+        applySpan(storage, str, cursor, escapedPositions: escapedPositions,
+                  pattern: "==([^=\\n]+)==",
+                  attrs: [.backgroundColor: NSColor.systemYellow.withAlphaComponent(0.35),
+                          .foregroundColor: NSColor.labelColor], ctx: ctx)
+
+        // Inline math $text$ (Obsidian)
+        applySpan(storage, str, cursor, escapedPositions: escapedPositions,
+                  pattern: "(?<!\\$)\\$(?!\\$)([^\\$\\n]+?)(?<!\\$)\\$(?!\\$)",
+                  attrs: [.font: ctx.mono, .foregroundColor: NSColor.systemPurple], ctx: ctx)
+
+        // Comments %%text%% (Obsidian) — hidden unless cursor is inside
+        applyComment(storage, str, cursor, ctx: ctx)
+
+        // Wikilinks [[Page]] or [[Page|Display]] (Obsidian)
+        applyWikilink(storage, str, cursor, ctx: ctx)
+
+        // Footnote references [^id] (Obsidian / CommonMark)
+        applyFootnoteRef(storage, str, cursor, ctx: ctx)
+
+        // Tags #tagname (Obsidian)
+        applyTag(storage, str, cursor, ctx: ctx)
+
         applyImage(storage, str, cursor, ctx: ctx)
         applyLink(storage, str, cursor, ctx: ctx)
     }
@@ -1565,6 +1690,99 @@ struct MarkdownFormatter {
                 brackets.forEach { storage.addAttributes(ctx.hide, range: $0) }
                 storage.addAttributes(ctx.hide, range: urlRange)
             }
+        }
+    }
+
+    // MARK: New Obsidian inline helpers
+
+    /// Comments %%text%% — invisible unless cursor is inside
+    private static func applyComment(_ storage: NSTextStorage, _ str: String, _ cursor: Int, ctx: Context) {
+        guard let regex = try? NSRegularExpression(pattern: "%%(.+?)%%", options: .dotMatchesLineSeparators) else { return }
+        let nsStr = str as NSString
+        let fullRange = NSRange(location: 0, length: nsStr.length)
+        for m in regex.matches(in: str, range: fullRange) {
+            let matchRange = m.range(at: 0)
+            let onSpan = cursor >= matchRange.location && cursor <= NSMaxRange(matchRange)
+            storage.addAttributes(onSpan ? [.foregroundColor: ctx.syntax] as [NSAttributedString.Key: Any] : ctx.hide,
+                                  range: matchRange)
+        }
+    }
+
+    /// Wikilinks [[Page]] or [[Page|Display text]]
+    private static func applyWikilink(_ storage: NSTextStorage, _ str: String, _ cursor: Int, ctx: Context) {
+        guard let regex = try? NSRegularExpression(pattern: "\\[\\[([^\\[\\]|\\n]+?)(?:\\|([^\\[\\]\\n]+?))?\\]\\]") else { return }
+        let nsStr = str as NSString
+        let fullRange = NSRange(location: 0, length: nsStr.length)
+        for m in regex.matches(in: str, range: fullRange) {
+            let matchRange   = m.range(at: 0)
+            let pageRange    = m.range(at: 1)
+            let displayRange = m.range(at: 2) // NSNotFound when no alias
+            let onLink = cursor >= matchRange.location && cursor <= NSMaxRange(matchRange)
+
+            let visibleRange = (displayRange.location != NSNotFound) ? displayRange : pageRange
+            storage.addAttributes([.foregroundColor: NSColor.linkColor,
+                                    .underlineStyle: NSUnderlineStyle.single.rawValue], range: visibleRange)
+
+            let symAttrs: [NSAttributedString.Key: Any] = [
+                .foregroundColor: ctx.syntax,
+                .font: NSFont.systemFont(ofSize: 12),
+                .underlineStyle: 0,
+            ]
+            let prefixRange = NSRange(location: matchRange.location, length: 2)                 // [[
+            let suffixRange = NSRange(location: NSMaxRange(matchRange) - 2, length: 2)          // ]]
+
+            if onLink {
+                storage.addAttributes(symAttrs, range: prefixRange)
+                storage.addAttributes(symAttrs, range: suffixRange)
+                if displayRange.location != NSNotFound {
+                    // show page name as syntax + pipe separator
+                    storage.addAttributes(symAttrs, range: pageRange)
+                    storage.addAttributes(symAttrs, range: NSRange(location: NSMaxRange(pageRange), length: 1))
+                }
+            } else {
+                storage.addAttributes(ctx.hide, range: prefixRange)
+                storage.addAttributes(ctx.hide, range: suffixRange)
+                if displayRange.location != NSNotFound {
+                    storage.addAttributes(ctx.hide, range: pageRange)
+                    storage.addAttributes(ctx.hide, range: NSRange(location: NSMaxRange(pageRange), length: 1))
+                }
+            }
+        }
+    }
+
+    /// Footnote references [^id] — styled as superscript
+    private static func applyFootnoteRef(_ storage: NSTextStorage, _ str: String, _ cursor: Int, ctx: Context) {
+        guard let regex = try? NSRegularExpression(pattern: "\\[\\^([^\\]\\n]+)\\]") else { return }
+        let nsStr = str as NSString
+        let fullRange = NSRange(location: 0, length: nsStr.length)
+        let small = ctx.fontSize * 0.75
+        for m in regex.matches(in: str, range: fullRange) {
+            let matchRange   = m.range(at: 0)
+            let contentRange = m.range(at: 1)
+            let onRef = cursor >= matchRange.location && cursor <= NSMaxRange(matchRange)
+
+            storage.addAttributes([.foregroundColor: NSColor.systemIndigo,
+                                    .font: NSFont.systemFont(ofSize: small),
+                                    .baselineOffset: ctx.fontSize * 0.25], range: matchRange)
+            if !onRef {
+                // hide [^ and ] brackets, keep just the id
+                storage.addAttributes(ctx.hide, range: NSRange(location: matchRange.location, length: 2))
+                storage.addAttributes(ctx.hide, range: NSRange(location: NSMaxRange(contentRange), length: 1))
+            }
+        }
+    }
+
+    /// Tags #tagname — teal coloured, slightly smaller
+    private static func applyTag(_ storage: NSTextStorage, _ str: String, _ cursor: Int, ctx: Context) {
+        guard let regex = try? NSRegularExpression(pattern: "(?<![&\\w#])#([a-zA-Z][a-zA-Z0-9_/-]*)") else { return }
+        let nsStr = str as NSString
+        let fullRange = NSRange(location: 0, length: nsStr.length)
+        for m in regex.matches(in: str, range: fullRange) {
+            let matchRange = m.range(at: 0)
+            storage.addAttributes([
+                .foregroundColor: NSColor.systemTeal,
+                .font: NSFont.monospacedSystemFont(ofSize: ctx.fontSize * 0.88, weight: .medium),
+            ], range: matchRange)
         }
     }
 }
