@@ -77,6 +77,7 @@ struct ContentView: View {
                     spellCheckEnabled: spellCheckEnabled,
                     lineWidth: lineWidth
                 )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 if !isFocusMode {
                     StatusBarView(wordCount: wordCount, charCount: charCount, lineCount: lineCount)
                 }
