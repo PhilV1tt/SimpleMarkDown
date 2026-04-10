@@ -80,7 +80,8 @@ struct ContentView: View {
                     isTypewriterMode: isTypewriterMode,
                     showLineNumbers: showLineNumbers,
                     spellCheckEnabled: spellCheckEnabled,
-                    lineWidth: lineWidth
+                    lineWidth: lineWidth,
+                    appearance: appearance
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 if !isFocusMode {
@@ -260,9 +261,9 @@ struct ContentView: View {
 
     private func applyAppearance(_ value: String) {
         switch value {
-        case "light": NSApp.appearance = NSAppearance(named: .aqua)
-        case "dark":  NSApp.appearance = NSAppearance(named: .darkAqua)
-        default:      NSApp.appearance = nil
+        case "light", "paper": NSApp.appearance = NSAppearance(named: .aqua)
+        case "dark":           NSApp.appearance = NSAppearance(named: .darkAqua)
+        default:               NSApp.appearance = nil  // follows system
         }
     }
 
@@ -748,6 +749,7 @@ struct SettingsView: View {
                     Text("System").tag("system")
                     Text("Light").tag("light")
                     Text("Dark").tag("dark")
+                    Text("Paper").tag("paper")
                 }
                 .pickerStyle(.segmented)
 
@@ -818,6 +820,13 @@ struct SettingsView: View {
 
 // MARK: - NSViewRepresentable (#3, #16, #21, #22, #23, #24, #29)
 
+// Warm cream color for paper mode — defined once, used in both the view and the formatter
+extension NSColor {
+    static let paperBackground = NSColor(red: 0.990, green: 0.968, blue: 0.900, alpha: 1)
+    static let paperCodeBg     = NSColor(red: 0.940, green: 0.918, blue: 0.850, alpha: 1)
+    static let paperText       = NSColor(red: 0.14,  green: 0.11,  blue: 0.08,  alpha: 1)
+}
+
 struct MarkdownEditorView: NSViewRepresentable {
     @Binding var text: String
     @Binding var isModified: Bool
@@ -826,6 +835,7 @@ struct MarkdownEditorView: NSViewRepresentable {
     let showLineNumbers: Bool
     let spellCheckEnabled: Bool
     let lineWidth: Double
+    let appearance: String
 
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = NSTextView.scrollableTextView()
@@ -861,6 +871,14 @@ struct MarkdownEditorView: NSViewRepresentable {
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let tv = scrollView.documentView as? NSTextView else { return }
+
+        // Apply background color for paper / dark modes
+        let bg: NSColor = appearance == "paper" ? .paperBackground : .textBackgroundColor
+        if tv.backgroundColor != bg {
+            tv.backgroundColor        = bg
+            scrollView.backgroundColor = bg
+            scrollView.contentView.backgroundColor = bg
+        }
 
         tv.isContinuousSpellCheckingEnabled = spellCheckEnabled
 
@@ -1229,10 +1247,11 @@ struct MarkdownFormatter {
             default:          syntax = NSColor.tertiaryLabelColor
             }
 
+            let isPaper = UserDefaults.standard.string(forKey: "appearance") == "paper"
             switch theme {
             case "solarized": codeBg = NSColor(red: 0.99, green: 0.96, blue: 0.89, alpha: 1)
             case "ocean":     codeBg = NSColor(red: 0.10, green: 0.13, blue: 0.18, alpha: 1)
-            default:          codeBg = NSColor.windowBackgroundColor
+            default:          codeBg = isPaper ? .paperCodeBg : NSColor.windowBackgroundColor
             }
 
             switch theme {
@@ -1256,7 +1275,8 @@ struct MarkdownFormatter {
         let fullRange = NSRange(location: 0, length: nsStr.length)
 
         storage.beginEditing()
-        storage.setAttributes([.font: ctx.body, .foregroundColor: NSColor.labelColor], range: fullRange)
+        let textColor: NSColor = (UserDefaults.standard.string(forKey: "appearance") == "paper") ? .paperText : .labelColor
+        storage.setAttributes([.font: ctx.body, .foregroundColor: textColor], range: fullRange)
         applyBlock(storage: storage, str: str, cursor: cursor, ctx: ctx)
         applyInline(storage: storage, str: str, cursor: cursor, ctx: ctx)
         storage.endEditing()
